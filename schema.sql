@@ -1,13 +1,11 @@
 -- D1 schema for japanese-learning gojuon checklist
 -- Run this ONCE in CF Dashboard -> D1 -> gojuon-progress -> Console after deploy.
--- v2: composite PK (kana, type) to track hiragana/katakana independently.
--- WARNING: this drops the existing learned_kana table and all its data.
+-- v3: revert to single-PK (kana). UI shows "hiragana/katakana" as one combined
+-- text label with a single shared toggle. Drops any prior table state.
 
 DROP TABLE IF EXISTS learned_kana;
 
 CREATE TABLE learned_kana (
-  kana TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('h', 'k')),
-  learned_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (kana, type)
+  kana TEXT PRIMARY KEY,
+  learned_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -1,6 +1,7 @@
 // Cloudflare Worker: gojuon checklist (click-to-learn with strikethrough)
 // Single-page UI, D1 single-user shared state, no build step.
-// v2: hiragana + katakana with independent learning state.
+// v3: shows hiragana/katakana side-by-side as "h/k" text in a single cell.
+//     One click toggles both readings together (shared state, single PK).
 
 const HTML = `<!DOCTYPE html>
 <html lang="ja">
@@ -22,7 +23,7 @@ const HTML = `<!DOCTYPE html>
 <script type="text/babel">
 const { useState, useEffect, useCallback } = React;
 
-// ========== Kana grids (hiragana) ==========
+// ========== Kana grids (hiragana keys; katakana derived via H2K) ==========
 const SEION = [
   ['',  ['あ','い','う','え','お']],
   ['k', ['か','き','く','け','こ']],
@@ -59,7 +60,7 @@ const YOUON = [
   ['p', ['ぴゃ','ぴゅ','ぴょ']],
 ];
 
-// Hiragana -> Katakana mapping (104 entries: 46 seion + 25 dakuon/handakuon + 33 youon).
+// Hiragana -> Katakana mapping (104 entries: display-only).
 // Hardcoded for clarity and to avoid Unicode-offset edge cases (e.g. ぢ づ).
 const H2K = {
   // seion (46)
@@ -96,7 +97,7 @@ const H2K = {
 
 const VOWELS_5 = ['a','i','u','e','o'];
 const VOWELS_3 = ['ya','yu','yo'];
-const TOTAL = (46 + 25 + 33) * 2; // 208 (hiragana + katakana)
+const TOTAL = 46 + 25 + 33; // 104 (one progress unit per hiragana/katakana pair)
 
 // ========== API ==========
 async function api(method, path, body) {
@@ -111,41 +112,20 @@ async function api(method, path, body) {
 }
 
 // ========== KanaCell ==========
-// Each cell is split horizontally into a hiragana button (left) and a
-// katakana button (right). Each half has its own learned state and toggles
-// independently. The two halves share a single shadow box.
-function KanaCell({ kana, learned, onToggle }) {
+// Single cell shows "hiragana/katakana" as one combined text label.
+// One click toggles both readings together (shared state).
+function KanaCell({ kana, isLearned, onToggle }) {
   if (kana === null) {
-    return <div style={{aspectRatio: '2 / 1'}}></div>;
+    return <div className="aspect-square"></div>;
   }
-  const kataKana = H2K[kana];
-  const hLearned = learned.has('h:' + kana);
-  const kLearned = learned.has('k:' + kataKana);
-
-  const baseCls = 'kana flex-1 flex items-center justify-center text-xl transition-all';
-  const learnedCls = ' bg-slate-200 text-slate-400 line-through';
-  const unlearnedCls = ' bg-white text-slate-900 font-bold hover:bg-blue-100';
-  const hCls = baseCls + (hLearned ? learnedCls : unlearnedCls);
-  const kCls = baseCls + (kLearned ? learnedCls : unlearnedCls);
-
+  const label = kana + '/' + H2K[kana];
+  const cls = isLearned
+    ? 'kana aspect-square flex items-center justify-center text-xl rounded-lg bg-slate-200 text-slate-400 line-through transition-all'
+    : 'kana aspect-square flex items-center justify-center text-xl rounded-lg bg-white text-slate-900 font-bold hover:bg-blue-100 hover:scale-105 transition-all shadow-sm';
   return (
-    <div
-      style={{aspectRatio: '2 / 1'}}
-      className="flex rounded-lg overflow-hidden shadow-sm"
-    >
-      <button
-        onClick={() => onToggle('h', kana)}
-        className={hCls + ' border-r border-slate-100'}
-      >
-        {kana}
-      </button>
-      <button
-        onClick={() => onToggle('k', kataKana)}
-        className={kCls}
-      >
-        {kataKana}
-      </button>
-    </div>
+    <button onClick={() => onToggle(kana)} className={cls}>
+      {label}
+    </button>
   );
 }
 
@@ -174,7 +154,7 @@ function KanaTable({ title, grid, vowels, learned, onToggle }) {
               <KanaCell
                 key={i}
                 kana={kana}
-                learned={learned}
+                isLearned={kana !== null && learned.has(kana)}
                 onToggle={onToggle}
               />
             ))}
@@ -193,11 +173,7 @@ function App() {
   useEffect(() => {
     api('GET', '/api/learned')
       .then(data => {
-        const set = new Set();
-        (data.learned || []).forEach(item => {
-          set.add(item.type + ':' + item.kana);
-        });
-        setLearned(set);
+        setLearned(new Set(data.learned || []));
         setLoading(false);
       })
       .catch(e => {
@@ -206,21 +182,20 @@ function App() {
       });
   }, []);
 
-  const handleToggle = useCallback(async (type, kana) => {
-    const key = type + ':' + kana;
-    const wasLearned = learned.has(key);
+  const handleToggle = useCallback(async (kana) => {
+    const wasLearned = learned.has(kana);
     setLearned(prev => {
       const next = new Set(prev);
-      if (wasLearned) next.delete(key); else next.add(key);
+      if (wasLearned) next.delete(kana); else next.add(kana);
       return next;
     });
     try {
-      await api('POST', wasLearned ? '/api/unlearn' : '/api/learn', { kana, type });
+      await api('POST', wasLearned ? '/api/unlearn' : '/api/learn', { kana });
     } catch (e) {
       console.error(e);
       setLearned(prev => {
         const next = new Set(prev);
-        if (wasLearned) next.add(key); else next.delete(key);
+        if (wasLearned) next.add(kana); else next.delete(kana);
         return next;
       });
       alert('同步失败: ' + e.message);
@@ -300,28 +275,24 @@ export default {
 
       if (pathname === '/api/learned' && method === 'GET') {
         const { results } = await env.DB.prepare(
-          'SELECT kana, type FROM learned_kana ORDER BY learned_at'
+          'SELECT kana FROM learned_kana ORDER BY learned_at'
         ).all();
-        return json({
-          learned: (results || []).map(r => ({ kana: r.kana, type: r.type }))
-        });
+        return json({ learned: (results || []).map(r => r.kana) });
       }
 
       if (pathname === '/api/learn' && method === 'POST') {
-        const { kana, type } = await request.json();
-        if (!kana || !type) return json({ error: 'missing kana or type' }, 400);
-        if (type !== 'h' && type !== 'k') return json({ error: 'invalid type' }, 400);
+        const { kana } = await request.json();
+        if (!kana) return json({ error: 'missing kana' }, 400);
         await env.DB.prepare(
-          "INSERT INTO learned_kana (kana, type, learned_at) VALUES (?1, ?2, datetime('now')) ON CONFLICT(kana, type) DO NOTHING"
-        ).bind(kana, type).run();
+          "INSERT INTO learned_kana (kana, learned_at) VALUES (?1, datetime('now')) ON CONFLICT(kana) DO NOTHING"
+        ).bind(kana).run();
         return json({ ok: true });
       }
 
       if (pathname === '/api/unlearn' && method === 'POST') {
-        const { kana, type } = await request.json();
-        if (!kana || !type) return json({ error: 'missing kana or type' }, 400);
-        await env.DB.prepare('DELETE FROM learned_kana WHERE kana = ?1 AND type = ?2')
-          .bind(kana, type).run();
+        const { kana } = await request.json();
+        if (!kana) return json({ error: 'missing kana' }, 400);
+        await env.DB.prepare('DELETE FROM learned_kana WHERE kana = ?1').bind(kana).run();
         return json({ ok: true });
       }
 
