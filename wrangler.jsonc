@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gojuon-app",
+  "main": "src/index.js",
+  "compatibility_date": "2025-04-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gojuon-progress",
+      "database_id": "19296ba2-e99e-4a2f-be8d-01d084720e02"
+    }
+  ]
+}
